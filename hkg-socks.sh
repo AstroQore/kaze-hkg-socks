@@ -7,6 +7,7 @@ set -euo pipefail
 LOG_FILE="/var/log/hkg-socks.log"
 TTY_IN="/dev/tty"
 TTY_OUT="/dev/tty"
+SB_BIN=""
 
 if [[ ! -r "$TTY_IN" || ! -w "$TTY_OUT" ]]; then
   TTY_IN="/dev/stdin"
@@ -92,8 +93,10 @@ install_singbox_if_needed() {
 }
 
 ensure_systemd_service() {
-  if systemctl list-unit-files | grep -q '^sing-box\.service'; then
-    return 0
+  SB_BIN="$(command -v sing-box || true)"
+  if [[ -z "$SB_BIN" ]]; then
+    log_error "sing-box binary not found in PATH."
+    exit 1
   fi
 
   cat > /etc/systemd/system/sing-box.service <<'UNIT'
@@ -103,7 +106,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+ExecStart=__SB_BIN__ run -c /etc/sing-box/config.json
 Restart=on-failure
 RestartSec=1s
 LimitNOFILE=1048576
@@ -112,7 +115,9 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 UNIT
 
+  sed -i "s|__SB_BIN__|${SB_BIN}|g" /etc/systemd/system/sing-box.service
   run_cmd "Reloading systemd daemon" "systemctl daemon-reload"
+  log_info "sing-box service uses binary: ${SB_BIN}"
 }
 
 pause() {
