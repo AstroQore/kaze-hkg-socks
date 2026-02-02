@@ -5,6 +5,13 @@ set -euo pipefail
 # Logging
 # -----------------------------
 LOG_FILE="/var/log/hkg-socks.log"
+TTY_IN="/dev/tty"
+TTY_OUT="/dev/tty"
+
+if [[ ! -r "$TTY_IN" || ! -w "$TTY_OUT" ]]; then
+  TTY_IN="/dev/stdin"
+  TTY_OUT="/dev/stderr"
+fi
 
 log() {
   local level="$1"; shift
@@ -18,6 +25,15 @@ log() {
 log_info() { log "INFO" "$*"; }
 log_warn() { log "WARN" "$*"; }
 log_error() { log "ERROR" "$*"; }
+
+read_tty() {
+  local __var="$1"; shift
+  local __prompt="$*"
+  printf "%s" "$__prompt" >"$TTY_OUT"
+  local __reply
+  IFS= read -r __reply <"$TTY_IN"
+  printf -v "$__var" "%s" "$__reply"
+}
 
 run_cmd() {
   local desc="$1"; shift
@@ -99,26 +115,28 @@ UNIT
   run_cmd "Reloading systemd daemon" "systemctl daemon-reload"
 }
 
-pause() { read -r -p "Press Enter to continue..."; }
+pause() {
+  read_tty _ "Press Enter to continue..."
+}
 
 menu_single() {
   local prompt="$1"; shift
   local -n _items=$1; shift
-  echo >&2
-  echo "$prompt" >&2
+  echo >"$TTY_OUT"
+  echo "$prompt" >"$TTY_OUT"
   local i
   for i in "${!_items[@]}"; do
-    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}" >&2
+    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}" >"$TTY_OUT"
   done
-  printf "  0) Direct (no proxy)\n" >&2
+  printf "  0) Direct (no proxy)\n" >"$TTY_OUT"
   local ans
   while true; do
-    read -r -p "Choose: " ans
+    read_tty ans "Choose: "
     if [[ "${ans}" =~ ^[0-9]+$ ]] && (( ans>=0 && ans<=${#_items[@]} )); then
       echo "${ans}"
       return 0
     fi
-    echo "Invalid choice."
+    echo "Invalid choice." >"$TTY_OUT"
   done
 }
 
@@ -126,16 +144,16 @@ menu_multi() {
   local prompt="$1"; shift
   local -n _items=$1; shift
 
-  echo >&2
-  echo "$prompt" >&2
+  echo >"$TTY_OUT"
+  echo "$prompt" >"$TTY_OUT"
   local i
   for i in "${!_items[@]}"; do
-    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}" >&2
+    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}" >"$TTY_OUT"
   done
-  echo "  a) All" >&2
-  echo "  0) None/Done" >&2
+  echo "  a) All" >"$TTY_OUT"
+  echo "  0) None/Done" >"$TTY_OUT"
   local ans
-  read -r -p "Input (e.g. 1 2 4 / 1,3 / a): " ans
+  read_tty ans "Input (e.g. 1 2 4 / 1,3 / a): "
   ans="${ans//,/ }"
 
   if [[ -z "${ans}" || "${ans}" == "a" || "${ans}" == "A" ]]; then
