@@ -2,6 +2,33 @@
 set -euo pipefail
 
 # -----------------------------
+# Logging
+# -----------------------------
+LOG_FILE="/var/log/hkg-socks.log"
+
+log() {
+  local level="$1"; shift
+  local msg="$*"
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  printf "%s [%s] %s\n" "$ts" "$level" "$msg"
+  printf "%s [%s] %s\n" "$ts" "$level" "$msg" >>"$LOG_FILE"
+}
+
+log_info() { log "INFO" "$*"; }
+log_warn() { log "WARN" "$*"; }
+log_error() { log "ERROR" "$*"; }
+
+run_cmd() {
+  local desc="$1"; shift
+  log_info "$desc"
+  if ! bash -c "$*" >>"$LOG_FILE" 2>&1; then
+    log_error "$desc failed. See ${LOG_FILE}."
+    exit 1
+  fi
+}
+
+# -----------------------------
 # User exits (extendable)
 # -----------------------------
 EXIT_TAGS=("HK_HKT" "TW_HINET" "HK_CMHK")
@@ -29,21 +56,23 @@ need_root() {
     echo "Please run as root: sudo $0"
     exit 1
   fi
+  touch "$LOG_FILE"
 }
 
 apt_deps() {
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y
-  apt-get install -y curl ca-certificates nftables python3 jq
+  run_cmd "Updating apt cache" "apt-get update -y"
+  run_cmd "Installing dependencies" "apt-get install -y curl ca-certificates nftables python3 jq"
 }
 
 install_singbox_if_needed() {
   if command -v sing-box >/dev/null 2>&1; then
+    log_info "sing-box already installed."
     return 0
   fi
-  echo "[+] Installing sing-box via official install script..."
+  log_info "Installing sing-box via official install script..."
   # Official install script reference: sing-box.app/install.sh
-  curl -fsSL https://sing-box.app/install.sh | sh
+  run_cmd "Running sing-box installer" "curl -fsSL https://sing-box.app/install.sh | sh"
 }
 
 ensure_systemd_service() {
@@ -67,7 +96,7 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 UNIT
 
-  systemctl daemon-reload
+  run_cmd "Reloading systemd daemon" "systemctl daemon-reload"
 }
 
 pause() { read -r -p "Press Enter to continue..."; }
@@ -268,7 +297,7 @@ PY
 compile_ruleset() {
   local json_file="$1"
   local srs_file="$2"
-  sing-box rule-set compile --output "$srs_file" "$json_file"
+  sing-box rule-set compile --output "$srs_file" "$json_file" >>"$LOG_FILE" 2>&1
 }
 
 # -----------------------------
@@ -391,6 +420,7 @@ PY
 # Main interactive flow
 # -----------------------------
 need_root
+log_info "Log file: ${LOG_FILE}"
 apt_deps
 install_singbox_if_needed
 ensure_systemd_service
@@ -508,14 +538,14 @@ SELECTED_TSV="${WORK_DIR}/selected.tsv"
 : > "$SELECTED_TSV"
 
 echo
-echo "[+] Fetching & compiling rulesets..."
+log_info "Fetching & compiling rulesets..."
 for sid in "${!FINAL_SVC_OUT[@]}"; do
   dir="${FINAL_SVC_DIR[$sid]}"
   out_tag="${FINAL_SVC_OUT[$sid]}"
 
   raw_path="${RAW_DIR}/${sid}.rule"
   if ! fetched="$(fetch_rule_file "$dir" "$raw_path")"; then
-    echo "[-] Skip ${SVC_NAME[$sid]} (${dir}): not found"
+    log_warn "Skip ${SVC_NAME[$sid]} (${dir}): not found"
     continue
   fi
 
@@ -526,11 +556,11 @@ for sid in "${!FINAL_SVC_OUT[@]}"; do
   compile_ruleset "$json_path" "$srs_path"
 
   printf "%s\t%s\t%s\n" "$sid" "$dir" "$out_tag" >> "$SELECTED_TSV"
-  echo "[+] ${SVC_NAME[$sid]} -> ${out_tag} (source: ${dir}/${fetched})"
+  log_info "${SVC_NAME[$sid]} -> ${out_tag} (source: ${dir}/${fetched})"
 done
 
 if [[ ! -s "$SELECTED_TSV" ]]; then
-  echo "No rulesets built. Abort."
+  log_error "No rulesets built. Abort."
   exit 1
 fi
 
@@ -540,12 +570,11 @@ if [[ -f "${SB_DIR}/config.json" ]]; then
 fi
 
 cfg_path="$(write_config "$SELECTED_TSV" "$DEFAULT_OUT")"
-echo
-echo "[+] sing-box config written: ${cfg_path}"
-echo "[+] Enabling & restarting sing-box..."
-systemctl enable --now sing-box
-systemctl restart sing-box
+log_info "sing-box config written: ${cfg_path}"
+log_info "Enabling & restarting sing-box..."
+run_cmd "Enable sing-box service" "systemctl enable --now sing-box"
+run_cmd "Restart sing-box service" "systemctl restart sing-box"
 
 echo
-echo "Done."
-echo "Tip: view logs -> journalctl -u sing-box -e"
+log_info "Done."
+log_info "Tip: view logs -> journalctl -u sing-box -e"
