@@ -2,6 +2,50 @@
 set -euo pipefail
 
 # -----------------------------
+# Logging
+# -----------------------------
+LOG_FILE="/var/log/hkg-socks.log"
+TTY_IN="/dev/tty"
+TTY_OUT="/dev/tty"
+SB_BIN=""
+
+if [[ ! -r "$TTY_IN" || ! -w "$TTY_OUT" ]]; then
+  TTY_IN="/dev/stdin"
+  TTY_OUT="/dev/stderr"
+fi
+
+log() {
+  local level="$1"; shift
+  local msg="$*"
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  printf "%s [%s] %s\n" "$ts" "$level" "$msg"
+  printf "%s [%s] %s\n" "$ts" "$level" "$msg" >>"$LOG_FILE"
+}
+
+log_info() { log "INFO" "$*"; }
+log_warn() { log "WARN" "$*"; }
+log_error() { log "ERROR" "$*"; }
+
+read_tty() {
+  local __var="$1"; shift
+  local __prompt="$*"
+  printf "%s" "$__prompt" >"$TTY_OUT"
+  local __reply
+  IFS= read -r __reply <"$TTY_IN"
+  printf -v "$__var" "%s" "$__reply"
+}
+
+run_cmd() {
+  local desc="$1"; shift
+  log_info "$desc"
+  if ! bash -c "$*" >>"$LOG_FILE" 2>&1; then
+    log_error "$desc failed. See ${LOG_FILE}."
+    exit 1
+  fi
+}
+
+# -----------------------------
 # User exits (extendable)
 # -----------------------------
 EXIT_TAGS=("HK_HKT" "TW_HINET" "HK_CMHK")
@@ -29,26 +73,30 @@ need_root() {
     echo "Please run as root: sudo $0"
     exit 1
   fi
+  touch "$LOG_FILE"
 }
 
 apt_deps() {
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y
-  apt-get install -y curl ca-certificates nftables python3 jq
+  run_cmd "Updating apt cache" "apt-get update -y"
+  run_cmd "Installing dependencies" "apt-get install -y curl ca-certificates nftables python3 jq"
 }
 
 install_singbox_if_needed() {
   if command -v sing-box >/dev/null 2>&1; then
+    log_info "sing-box already installed."
     return 0
   fi
-  echo "[+] Installing sing-box via official install script..."
+  log_info "Installing sing-box via official install script..."
   # Official install script reference: sing-box.app/install.sh
-  curl -fsSL https://sing-box.app/install.sh | sh
+  run_cmd "Running sing-box installer" "curl -fsSL https://sing-box.app/install.sh | sh"
 }
 
 ensure_systemd_service() {
-  if systemctl list-unit-files | grep -q '^sing-box\.service'; then
-    return 0
+  SB_BIN="$(command -v sing-box || true)"
+  if [[ -z "$SB_BIN" ]]; then
+    log_error "sing-box binary not found in PATH."
+    exit 1
   fi
 
   cat > /etc/systemd/system/sing-box.service <<'UNIT'
@@ -58,7 +106,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+ExecStart=__SB_BIN__ run -c /etc/sing-box/config.json
 Restart=on-failure
 RestartSec=1s
 LimitNOFILE=1048576
@@ -67,29 +115,33 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 UNIT
 
-  systemctl daemon-reload
+  sed -i "s|__SB_BIN__|${SB_BIN}|g" /etc/systemd/system/sing-box.service
+  run_cmd "Reloading systemd daemon" "systemctl daemon-reload"
+  log_info "sing-box service uses binary: ${SB_BIN}"
 }
 
-pause() { read -r -p "Press Enter to continue..."; }
+pause() {
+  read_tty _ "Press Enter to continue..."
+}
 
 menu_single() {
   local prompt="$1"; shift
   local -n _items=$1; shift
-  echo
-  echo "$prompt"
+  echo >"$TTY_OUT"
+  echo "$prompt" >"$TTY_OUT"
   local i
   for i in "${!_items[@]}"; do
-    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}"
+    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}" >"$TTY_OUT"
   done
-  printf "  0) Direct (no proxy)\n"
+  printf "  0) Direct (no proxy)\n" >"$TTY_OUT"
   local ans
   while true; do
-    read -r -p "Choose: " ans
+    read_tty ans "Choose: "
     if [[ "${ans}" =~ ^[0-9]+$ ]] && (( ans>=0 && ans<=${#_items[@]} )); then
       echo "${ans}"
       return 0
     fi
-    echo "Invalid choice."
+    echo "Invalid choice." >"$TTY_OUT"
   done
 }
 
@@ -97,16 +149,16 @@ menu_multi() {
   local prompt="$1"; shift
   local -n _items=$1; shift
 
-  echo
-  echo "$prompt"
+  echo >"$TTY_OUT"
+  echo "$prompt" >"$TTY_OUT"
   local i
   for i in "${!_items[@]}"; do
-    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}"
+    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}" >"$TTY_OUT"
   done
-  echo "  a) All"
-  echo "  0) None/Done"
+  echo "  a) All" >"$TTY_OUT"
+  echo "  0) None/Done" >"$TTY_OUT"
   local ans
-  read -r -p "Input (e.g. 1 2 4 / 1,3 / a): " ans
+  read_tty ans "Input (e.g. 1 2 4 / 1,3 / a): "
   ans="${ans//,/ }"
 
   if [[ -z "${ans}" || "${ans}" == "a" || "${ans}" == "A" ]]; then
@@ -268,7 +320,7 @@ PY
 compile_ruleset() {
   local json_file="$1"
   local srs_file="$2"
-  sing-box rule-set compile --output "$srs_file" "$json_file"
+  sing-box rule-set compile --output "$srs_file" "$json_file" >>"$LOG_FILE" 2>&1
 }
 
 # -----------------------------
@@ -391,6 +443,7 @@ PY
 # Main interactive flow
 # -----------------------------
 need_root
+log_info "Log file: ${LOG_FILE}"
 apt_deps
 install_singbox_if_needed
 ensure_systemd_service
@@ -508,14 +561,14 @@ SELECTED_TSV="${WORK_DIR}/selected.tsv"
 : > "$SELECTED_TSV"
 
 echo
-echo "[+] Fetching & compiling rulesets..."
+log_info "Fetching & compiling rulesets..."
 for sid in "${!FINAL_SVC_OUT[@]}"; do
   dir="${FINAL_SVC_DIR[$sid]}"
   out_tag="${FINAL_SVC_OUT[$sid]}"
 
   raw_path="${RAW_DIR}/${sid}.rule"
   if ! fetched="$(fetch_rule_file "$dir" "$raw_path")"; then
-    echo "[-] Skip ${SVC_NAME[$sid]} (${dir}): not found"
+    log_warn "Skip ${SVC_NAME[$sid]} (${dir}): not found"
     continue
   fi
 
@@ -526,11 +579,11 @@ for sid in "${!FINAL_SVC_OUT[@]}"; do
   compile_ruleset "$json_path" "$srs_path"
 
   printf "%s\t%s\t%s\n" "$sid" "$dir" "$out_tag" >> "$SELECTED_TSV"
-  echo "[+] ${SVC_NAME[$sid]} -> ${out_tag} (source: ${dir}/${fetched})"
+  log_info "${SVC_NAME[$sid]} -> ${out_tag} (source: ${dir}/${fetched})"
 done
 
 if [[ ! -s "$SELECTED_TSV" ]]; then
-  echo "No rulesets built. Abort."
+  log_error "No rulesets built. Abort."
   exit 1
 fi
 
@@ -540,12 +593,11 @@ if [[ -f "${SB_DIR}/config.json" ]]; then
 fi
 
 cfg_path="$(write_config "$SELECTED_TSV" "$DEFAULT_OUT")"
-echo
-echo "[+] sing-box config written: ${cfg_path}"
-echo "[+] Enabling & restarting sing-box..."
-systemctl enable --now sing-box
-systemctl restart sing-box
+log_info "sing-box config written: ${cfg_path}"
+log_info "Enabling & restarting sing-box..."
+run_cmd "Enable sing-box service" "systemctl enable --now sing-box"
+run_cmd "Restart sing-box service" "systemctl restart sing-box"
 
 echo
-echo "Done."
-echo "Tip: view logs -> journalctl -u sing-box -e"
+log_info "Done."
+log_info "Tip: view logs -> journalctl -u sing-box -e"
