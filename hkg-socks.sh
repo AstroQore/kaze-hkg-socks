@@ -349,9 +349,10 @@ with open(tsv, "r", encoding="utf-8") as f:
 used_outbounds = sorted(set([o for _,_,o in items if o != "direct"]))
 
 # DNS servers per outbound (DoH via corresponding outbound)
+dns_direct_addr = "udp://223.5.5.5"
 dns_servers = [
-    {"tag": "dns-init", "address": "udp://223.5.5.5", "detour": "direct"},
-    {"tag": "dns-direct", "address": "udp://223.5.5.5", "detour": "direct"},
+    {"tag": "dns-init", "address": dns_direct_addr, "detour": "direct"},
+    {"tag": "dns-direct", "address": dns_direct_addr, "detour": "direct"},
 ]
 for o in used_outbounds:
     dns_servers.append({"tag": f"dns-{o}", "address": "https://1.1.1.1/dns-query", "detour": o})
