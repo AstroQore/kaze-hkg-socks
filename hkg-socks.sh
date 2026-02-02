@@ -104,13 +104,13 @@ pause() { read -r -p "Press Enter to continue..."; }
 menu_single() {
   local prompt="$1"; shift
   local -n _items=$1; shift
-  echo
-  echo "$prompt"
+  echo >&2
+  echo "$prompt" >&2
   local i
   for i in "${!_items[@]}"; do
-    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}"
+    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}" >&2
   done
-  printf "  0) Direct (no proxy)\n"
+  printf "  0) Direct (no proxy)\n" >&2
   local ans
   while true; do
     read -r -p "Choose: " ans
@@ -126,14 +126,14 @@ menu_multi() {
   local prompt="$1"; shift
   local -n _items=$1; shift
 
-  echo
-  echo "$prompt"
+  echo >&2
+  echo "$prompt" >&2
   local i
   for i in "${!_items[@]}"; do
-    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}"
+    printf "  %d) %s\n" "$((i+1))" "${_items[$i]}" >&2
   done
-  echo "  a) All"
-  echo "  0) None/Done"
+  echo "  a) All" >&2
+  echo "  0) None/Done" >&2
   local ans
   read -r -p "Input (e.g. 1 2 4 / 1,3 / a): " ans
   ans="${ans//,/ }"
