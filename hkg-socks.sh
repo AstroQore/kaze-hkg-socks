@@ -350,8 +350,8 @@ used_outbounds = sorted(set([o for _,_,o in items if o != "direct"]))
 
 # DNS servers per outbound (DoH via corresponding outbound)
 dns_servers = [
-    {"tag": "dns-init", "address": "223.5.5.5", "detour": "direct"},
-    {"tag": "dns-direct", "address": "223.5.5.5", "detour": "direct"},
+    {"tag": "dns-init", "address": "udp://223.5.5.5", "detour": "direct"},
+    {"tag": "dns-direct", "address": "udp://223.5.5.5", "detour": "direct"},
 ]
 for o in used_outbounds:
     dns_servers.append({"tag": f"dns-{o}", "address": "https://1.1.1.1/dns-query", "detour": o})
@@ -407,7 +407,7 @@ config = {
       "type": "tun",
       "tag": "tun-in",
       "interface_name": "singtun0",
-      "inet4_address": "172.19.0.1/30",
+      "address": ["172.19.0.1/30"],
       "mtu": 1500,
       "auto_route": True,
       "auto_redirect": True,
